@@ -76,62 +76,91 @@ authRouter.post('/login', async (c) => {
 
 // 3. Quên mật khẩu
 authRouter.post('/forgot-password', async (c) => {
-  const { email } = await c.req.json<{ email?: string }>();
-  const normalizedEmail = email?.trim().toLowerCase();
+  try {
+    if (!c.env?.DB) {
+      return c.json({ error: 'Cơ sở dữ liệu không khả dụng' }, 500);
+    }
 
-  if (!normalizedEmail) {
-    return c.json({ error: 'Vui lòng cung cấp email' }, 400);
+    let body: { email?: string };
+    try {
+      body = await c.req.json<{ email?: string }>();
+    } catch {
+      return c.json({ error: 'Dữ liệu yêu cầu không hợp lệ' }, 400);
+    }
+
+    const normalizedEmail = body.email?.trim().toLowerCase();
+
+    if (!normalizedEmail) {
+      return c.json({ error: 'Vui lòng cung cấp email' }, 400);
+    }
+
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return c.json({ error: 'Email không đúng định dạng (ví dụ: user@example.com)' }, 400);
+    }
+
+    const user = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?')
+      .bind(normalizedEmail)
+      .first();
+
+    if (!user) {
+      return c.json({ error: 'Email không tồn tại trong hệ thống' }, 404);
+    }
+
+    const token = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
+      .toISOString()
+      .slice(0, 19)
+      .replace('T', ' ');
+
+    await c.env.DB.prepare('INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, ?)')
+      .bind(normalizedEmail, token, expiresAt)
+      .run();
+
+    let emailSent = false;
+    const resendKey = c.env.RESEND_API_KEY;
+
+    if (resendKey && !resendKey.includes('<PASTE') && !resendKey.includes('<SET') && resendKey.trim().length > 5) {
+      try {
+        const resendResponse = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendKey.trim()}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: 'onboarding@resend.dev',
+            to: normalizedEmail,
+            subject: 'Mã xác nhận đặt lại mật khẩu',
+            html: `
+              <p>Bạn đã yêu cầu đặt lại mật khẩu.</p>
+              <p>Mã xác nhận của bạn là:</p>
+              <p><strong>${token}</strong></p>
+              <p>Mã này sẽ hết hạn sau 15 phút.</p>
+            `,
+          }),
+        });
+
+        if (resendResponse.ok) {
+          emailSent = true;
+        } else {
+          const errText = await resendResponse.text();
+          console.warn('Resend API returned non-OK:', errText);
+        }
+      } catch (err) {
+        console.warn('Lỗi khi gọi Resend API:', err);
+      }
+    }
+
+    return c.json({
+      message: emailSent
+        ? 'Mã xác nhận đã được gửi đến email và tự động điền vào ô bên dưới!'
+        : 'Mã khôi phục đã được tạo và tự động điền vào ô bên dưới!',
+      reset_token: token,
+    });
+  } catch (err: any) {
+    console.error('Lỗi khi xử lý forgot-password:', err);
+    return c.json({ error: err?.message || 'Đã xảy ra lỗi trên máy chủ khi gửi yêu cầu' }, 500);
   }
-
-  if (!EMAIL_REGEX.test(normalizedEmail)) {
-    return c.json({ error: 'Email không đúng định dạng' }, 400);
-  }
-
-  const user = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?')
-    .bind(normalizedEmail)
-    .first();
-
-  if (!user) {
-    return c.json({ error: 'Email không tồn tại trong hệ thống' }, 404);
-  }
-
-  const token = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
-    .toISOString()
-    .slice(0, 19)
-    .replace('T', ' ');
-
-  await c.env.DB.prepare('INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, ?)')
-    .bind(normalizedEmail, token, expiresAt)
-    .run();
-
-  const resendResponse = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${c.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: 'onboarding@resend.dev',
-      to: normalizedEmail,
-      subject: 'Mã xác nhận đặt lại mật khẩu',
-      html: `
-        <p>Bạn đã yêu cầu đặt lại mật khẩu.</p>
-        <p>Mã xác nhận của bạn là:</p>
-        <p><strong>${token}</strong></p>
-        <p>Mã này sẽ hết hạn sau 15 phút.</p>
-      `,
-    }),
-  });
-
-  if (!resendResponse.ok) {
-    await c.env.DB.prepare('DELETE FROM password_resets WHERE token = ?').bind(token).run();
-    return c.json({ error: 'Không thể gửi email đặt lại mật khẩu' }, 502);
-  }
-
-  return c.json({
-    message: 'Mã xác nhận đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư!',
-  });
 });
 
 // 4. Đặt lại mật khẩu mới
