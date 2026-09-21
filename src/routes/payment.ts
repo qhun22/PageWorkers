@@ -90,8 +90,8 @@ paymentRouter.post('/vnpay', async (c) => {
     }
 
     const vnp_Url = c.env.VNPAY_URL || 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html';
-    const vnp_TmnCode = c.env.VNPAY_TMN_CODE || 'T5GUNJMO';
-    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
+    const vnp_TmnCode = c.env.VNPAY_TMN_CODE || '<SET_YOUR_VNPAY_TMN_CODE>';
+    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
     const origin = body.returnOrigin || new URL(c.req.url).origin;
     const vnp_ReturnUrl = `${origin}/api/payment/vnpay/return`;
 
@@ -160,7 +160,7 @@ paymentRouter.get('/vnpay/return', async (c) => {
   const responseCode = query['vnp_ResponseCode'] || '';
   const txnRef = query['vnp_TxnRef'] || '';
   const amount = (Number(query['vnp_Amount']) || 0) / 100;
-  const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
+  const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
 
   // Kiểm tra chữ ký bảo mật từ VNPay
   const verifyParams: Record<string, string> = {};
@@ -202,7 +202,7 @@ paymentRouter.get('/vnpay/ipn', async (c) => {
     const secureHash = query['vnp_SecureHash'] || '';
     const responseCode = query['vnp_ResponseCode'] || '';
     const transactionStatus = query['vnp_TransactionStatus'] || '';
-    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
+    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
 
     const verifyParams: Record<string, string> = {};
     for (const key in query) {
@@ -252,9 +252,9 @@ paymentRouter.post('/momo', async (c) => {
     }
 
     const endpoint = c.env.MOMO_ENDPOINT || 'https://test-payment.momo.vn/v2/gateway/api/create';
-    const partnerCode = c.env.MOMO_PARTNER_CODE || 'MOMO';
-    const accessKey = c.env.MOMO_ACCESS_KEY || 'F8BBA842ECF85';
-    const secretKey = c.env.MOMO_SECRET_KEY || 'K951B6PE1waDMi640xX08PD3vg6EkVlz';
+    const partnerCode = c.env.MOMO_PARTNER_CODE || '<SET_YOUR_MOMO_PARTNER_CODE>';
+    const accessKey = c.env.MOMO_ACCESS_KEY || '<SET_YOUR_MOMO_ACCESS_KEY>';
+    const secretKey = c.env.MOMO_SECRET_KEY || '<SET_YOUR_MOMO_SECRET_KEY>';
     const origin = body.returnOrigin || new URL(c.req.url).origin;
     const redirectUrl = `${origin}/api/payment/momo/return`;
     const ipnUrl = `${origin}/api/payment/momo/return`;
