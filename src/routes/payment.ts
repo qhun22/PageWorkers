@@ -5,56 +5,33 @@ import { hmacSHA512, hmacSHA256 } from '../utils/crypto';
 export const paymentRouter = new Hono<Env>();
 
 // Helper lấy thời gian thực GMT+7 (Asia/Ho_Chi_Minh) cho VNPay (vnp_CreateDate & vnp_ExpireDate)
-async function getVnDates(): Promise<{ createDate: string; expireDate: string }> {
-  let now = new Date();
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
-    const res = await fetch('https://sandbox.vnpayment.vn/paymentv2/vpcpay.html', {
-      method: 'HEAD',
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    const serverDate = res.headers.get('date');
-    if (serverDate) {
-      const parsed = new Date(serverDate);
-      if (!isNaN(parsed.getTime())) {
-        now = parsed;
-      }
-    }
-  } catch {
-    // Sử dụng giờ hệ thống hiện tại nếu fetch timeout
-  }
-
-  const formatter = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-
+// Cloudflare Worker chạy giờ UTC -> Cộng thêm 7 tiếng (7 * 60 * 60 * 1000) vào Date.now()
+function getVnDates(): { createDate: string; expireDate: string } {
+  const pad = (n: number) => n.toString().padStart(2, '0');
   const format = (d: Date) => {
-    const parts = formatter.formatToParts(d);
-    const m: Record<string, string> = {};
-    for (const p of parts) m[p.type] = p.value;
-    return `${m.year}${m.month}${m.day}${m.hour}${m.minute}${m.second}`;
+    const y = d.getUTCFullYear();
+    const m = pad(d.getUTCMonth() + 1);
+    const day = pad(d.getUTCDate());
+    const h = pad(d.getUTCHours());
+    const min = pad(d.getUTCMinutes());
+    const s = pad(d.getUTCSeconds());
+    return `${y}${m}${day}${h}${min}${s}`;
   };
 
-  const createDate = format(now);
-  const expireDate = format(new Date(now.getTime() + 15 * 60 * 1000));
+  const gmt7Time = Date.now() + 7 * 60 * 60 * 1000;
+  const createDate = format(new Date(gmt7Time));
+  const expireDate = format(new Date(gmt7Time + 15 * 60 * 1000));
   return { createDate, expireDate };
 }
 
-// Helper lấy IP client chuẩn IPv4 cho VNPay
+// Helper lấy IP client chuẩn IPv4 cho VNPay (loại bỏ hoàn toàn IPv6 gây lỗi VNPay sandbox)
 function getClientIp(c: any): string {
   const forwarded = c.req.header('x-forwarded-for');
   let ip = forwarded ? forwarded.split(',')[0].trim() : '';
   if (!ip) ip = c.req.header('cf-connecting-ip') || '';
-  if (!ip || ip.includes(':')) ip = '127.0.0.1';
+  if (!ip || ip.includes(':')) {
+    ip = '127.0.0.1';
+  }
   return ip;
 }
 
@@ -90,12 +67,12 @@ paymentRouter.post('/vnpay', async (c) => {
     }
 
     const vnp_Url = c.env.VNPAY_URL || 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html';
-    const vnp_TmnCode = c.env.VNPAY_TMN_CODE || '<SET_YOUR_VNPAY_TMN_CODE>';
-    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
+    const vnp_TmnCode = c.env.VNPAY_TMN_CODE && !c.env.VNPAY_TMN_CODE.includes('<SET') ? c.env.VNPAY_TMN_CODE : 'T5GUNJMO';
+    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET && !c.env.VNPAY_HASH_SECRET.includes('<SET') ? c.env.VNPAY_HASH_SECRET : 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
     const origin = body.returnOrigin || new URL(c.req.url).origin;
     const vnp_ReturnUrl = `${origin}/api/payment/vnpay/return`;
 
-    const { createDate, expireDate } = await getVnDates();
+    const { createDate, expireDate } = getVnDates();
 
     const vnp_Params: Record<string, string> = {
       vnp_Version: '2.1.0',
@@ -160,7 +137,7 @@ paymentRouter.get('/vnpay/return', async (c) => {
   const responseCode = query['vnp_ResponseCode'] || '';
   const txnRef = query['vnp_TxnRef'] || '';
   const amount = (Number(query['vnp_Amount']) || 0) / 100;
-  const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
+  const vnp_HashSecret = c.env.VNPAY_HASH_SECRET && !c.env.VNPAY_HASH_SECRET.includes('<SET') ? c.env.VNPAY_HASH_SECRET : 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
 
   // Kiểm tra chữ ký bảo mật từ VNPay
   const verifyParams: Record<string, string> = {};
@@ -202,7 +179,7 @@ paymentRouter.get('/vnpay/ipn', async (c) => {
     const secureHash = query['vnp_SecureHash'] || '';
     const responseCode = query['vnp_ResponseCode'] || '';
     const transactionStatus = query['vnp_TransactionStatus'] || '';
-    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET || '<SET_YOUR_VNPAY_HASH_SECRET>';
+    const vnp_HashSecret = c.env.VNPAY_HASH_SECRET && !c.env.VNPAY_HASH_SECRET.includes('<SET') ? c.env.VNPAY_HASH_SECRET : 'CVUTUJNGXAJVTAFASXYHRJTCXOQIIMON';
 
     const verifyParams: Record<string, string> = {};
     for (const key in query) {
@@ -251,10 +228,13 @@ paymentRouter.post('/momo', async (c) => {
       return c.json({ error: 'Số tiền thanh toán không hợp lệ' }, 400);
     }
 
-    const endpoint = c.env.MOMO_ENDPOINT || 'https://test-payment.momo.vn/v2/gateway/api/create';
-    const partnerCode = c.env.MOMO_PARTNER_CODE || '<SET_YOUR_MOMO_PARTNER_CODE>';
-    const accessKey = c.env.MOMO_ACCESS_KEY || '<SET_YOUR_MOMO_ACCESS_KEY>';
-    const secretKey = c.env.MOMO_SECRET_KEY || '<SET_YOUR_MOMO_SECRET_KEY>';
+    const endpoint = c.env.MOMO_ENDPOINT && !c.env.MOMO_ENDPOINT.includes('<SET') ? c.env.MOMO_ENDPOINT : 'https://test-payment.momo.vn/v2/gateway/api/create';
+    const partnerCode = c.env.MOMO_PARTNER_CODE && !c.env.MOMO_PARTNER_CODE.includes('<SET') ? c.env.MOMO_PARTNER_CODE : 'MOMO';
+    const accessKey = c.env.MOMO_ACCESS_KEY && !c.env.MOMO_ACCESS_KEY.includes('<SET') ? c.env.MOMO_ACCESS_KEY : 'F8BBA842ECF85';
+    let secretKey = c.env.MOMO_SECRET_KEY && !c.env.MOMO_SECRET_KEY.includes('<SET') ? c.env.MOMO_SECRET_KEY : 'K951B6PE1waDMi640xX08PD3vg6EkVlz';
+    if (secretKey === 'K951B6PE1waDMi640xX08PD3vg6Ekvlz') {
+      secretKey = 'K951B6PE1waDMi640xX08PD3vg6EkVlz';
+    }
     const origin = body.returnOrigin || new URL(c.req.url).origin;
     const redirectUrl = `${origin}/api/payment/momo/return`;
     const ipnUrl = `${origin}/api/payment/momo/return`;
