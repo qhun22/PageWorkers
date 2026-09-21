@@ -136,32 +136,49 @@ authRouter.post('/forgot-password', async (c) => {
 
 // 4. Đặt lại mật khẩu mới
 authRouter.post('/reset-password', async (c) => {
-  const { token, new_password } = await c.req.json<{ token?: string; new_password?: string }>();
+  try {
+    if (!c.env?.DB) {
+      return c.json({ error: 'Cơ sở dữ liệu không khả dụng hoặc chưa được cấu hình' }, 500);
+    }
 
-  if (!token?.trim() || !new_password) {
-    return c.json({ error: 'Vui lòng điền token và new_password' }, 400);
+    let body: { token?: string; new_password?: string };
+    try {
+      body = await c.req.json<{ token?: string; new_password?: string }>();
+    } catch {
+      return c.json({ error: 'Dữ liệu yêu cầu không hợp lệ' }, 400);
+    }
+
+    const { token, new_password } = body;
+
+    if (!token?.trim() || !new_password) {
+      return c.json({ error: 'Vui lòng điền token và new_password' }, 400);
+    }
+
+    if (new_password.length < 6) {
+      return c.json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự' }, 400);
+    }
+
+    const resetRecord = await c.env.DB.prepare(
+      'SELECT * FROM password_resets WHERE token = ? AND expires_at > datetime("now")'
+    )
+      .bind(token.trim())
+      .first<{ email: string }>();
+
+    if (!resetRecord) {
+      return c.json({ error: 'Token không hợp lệ hoặc đã hết hạn' }, 400);
+    }
+
+    // Băm mật khẩu bằng Web Crypto API (SHA-256 native) tương thích Cloudflare Workers
+    const newHash = await hashPassword(new_password);
+
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE email = ?').bind(newHash, resetRecord.email),
+      c.env.DB.prepare('DELETE FROM password_resets WHERE token = ?').bind(token.trim()),
+    ]);
+
+    return c.json({ message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập lại.' });
+  } catch (err: any) {
+    console.error('Lỗi khi xử lý reset-password:', err);
+    return c.json({ error: err?.message || 'Đã xảy ra lỗi trên máy chủ khi đặt lại mật khẩu' }, 500);
   }
-
-  if (new_password.length < 6) {
-    return c.json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự' }, 400);
-  }
-
-  const resetRecord = await c.env.DB.prepare(
-    'SELECT * FROM password_resets WHERE token = ? AND expires_at > datetime("now")'
-  )
-    .bind(token.trim())
-    .first<{ email: string }>();
-
-  if (!resetRecord) {
-    return c.json({ error: 'Token không hợp lệ hoặc đã hết hạn' }, 400);
-  }
-
-  const newHash = await hashPassword(new_password);
-
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE email = ?').bind(newHash, resetRecord.email),
-    c.env.DB.prepare('DELETE FROM password_resets WHERE token = ?').bind(token.trim()),
-  ]);
-
-  return c.json({ message: 'Đặt lại mật khẩu thành công' });
 });
